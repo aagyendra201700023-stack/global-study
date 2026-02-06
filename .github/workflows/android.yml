@@ -1,0 +1,211 @@
+from kivy.app import App
+from kivy.lang import Builder
+from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.uix.popup import Popup
+from kivy.uix.label import Label
+from kivy.uix.button import Button
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.textinput import TextInput
+import sqlite3
+import re
+import random
+from datetime import datetime
+
+# ================= CONSTANTS =================
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "admin123"
+
+BAD_WORDS = [
+    "fuck","shit","bitch","asshole","bastard",
+    "mc","bc","madarchod","behenchod"
+]
+
+def censor(text):
+    for w in BAD_WORDS:
+        text = re.sub(rf"\b{w}\b", "%%", text, flags=re.I)
+    return text
+
+# ================= UI =================
+KV = """
+ScreenManager:
+    LoginScreen:
+    DashboardScreen:
+    PublicScreen:
+
+<LoginScreen>:
+    name: "login"
+    BoxLayout:
+        orientation: "vertical"
+        padding: 40
+        spacing: 20
+
+        Label:
+            text: "Global Study"
+            font_size: 32
+
+        TextInput:
+            id: user
+            hint_text: "Username"
+            multiline: False
+
+        TextInput:
+            id: pwd
+            hint_text: "Password"
+            password: True
+            multiline: False
+
+        Button:
+            text: "Login"
+            on_release: app.login(user.text, pwd.text)
+
+        Button:
+            text: "Create Account"
+            on_release: app.signup(user.text, pwd.text)
+
+<DashboardScreen>:
+    name: "dash"
+    BoxLayout:
+        orientation: "vertical"
+        padding: 20
+        spacing: 10
+
+        Label:
+            text: "Dashboard"
+            font_size: 24
+
+        TextInput:
+            id: note
+            hint_text: "Write note"
+            size_hint_y: 0.4
+
+        Button:
+            text: "Save Private Note"
+            on_release: app.save_private(note.text)
+
+        Button:
+            text: "Publish Public Note"
+            on_release: app.publish_public(note.text)
+
+        Button:
+            text: "View Public Notes"
+            on_release: app.show_public()
+
+        Button:
+            text: "Take Test"
+            on_release: app.take_test()
+
+        Button:
+            text: "Logout"
+            on_release: app.logout()
+
+<PublicScreen>:
+    name: "public"
+    BoxLayout:
+        orientation: "vertical"
+        padding: 20
+
+        Label:
+            id: pub
+            text: ""
+            size_hint_y: 0.9
+
+        Button:
+            text: "Back"
+            size_hint_y: 0.1
+            on_release: app.back()
+"""
+
+# ================= SCREENS =================
+class LoginScreen(Screen): pass
+class DashboardScreen(Screen): pass
+class PublicScreen(Screen): pass
+
+# ================= APP =================
+class GlobalStudy(App):
+
+    def build(self):
+        self.conn = sqlite3.connect("global_study.db")
+        self.cur = self.conn.cursor()
+
+        self.cur.execute("CREATE TABLE IF NOT EXISTS users(username TEXT PRIMARY KEY, password TEXT)")
+        self.cur.execute("CREATE TABLE IF NOT EXISTS notes(username TEXT, content TEXT)")
+        self.cur.execute("CREATE TABLE IF NOT EXISTS public_notes(username TEXT, content TEXT, time TEXT)")
+        self.conn.commit()
+
+        # Ensure admin
+        self.cur.execute("SELECT * FROM users WHERE username=?", (ADMIN_USERNAME,))
+        if not self.cur.fetchone():
+            self.cur.execute("INSERT INTO users VALUES (?,?)", (ADMIN_USERNAME, ADMIN_PASSWORD))
+            self.conn.commit()
+
+        self.user = None
+        return Builder.load_string(KV)
+
+    # ---------- POPUP ----------
+    def popup(self, msg):
+        Popup(title="Info", content=Label(text=msg),
+              size_hint=(.7,.4)).open()
+
+    # ---------- AUTH ----------
+    def login(self, u, p):
+        self.cur.execute("SELECT * FROM users WHERE username=? AND password=?", (u,p))
+        if self.cur.fetchone():
+            self.user = u
+            self.root.current = "dash"
+        else:
+            self.popup("Invalid login")
+
+    def signup(self, u, p):
+        try:
+            self.cur.execute("INSERT INTO users VALUES (?,?)", (u,p))
+            self.conn.commit()
+            self.popup("Account created")
+        except:
+            self.popup("User exists")
+
+    def logout(self):
+        self.user = None
+        self.root.current = "login"
+
+    # ---------- NOTES ----------
+    def save_private(self, t):
+        if t:
+            self.cur.execute("INSERT INTO notes VALUES (?,?)", (self.user,t))
+            self.conn.commit()
+            self.popup("Private note saved")
+
+    def publish_public(self, t):
+        if t:
+            t = censor(t)
+            self.cur.execute(
+                "INSERT INTO public_notes VALUES (?,?,?)",
+                (self.user,t,datetime.now().strftime("%Y-%m-%d %H:%M"))
+            )
+            self.conn.commit()
+            self.popup("Published")
+
+    def show_public(self):
+        self.cur.execute("SELECT username,content,time FROM public_notes ORDER BY time DESC")
+        out = ""
+        for u,c,t in self.cur.fetchall():
+            out += f"{u} ({t})\n{c}\n\n"
+        self.root.get_screen("public").ids.pub.text = out
+        self.root.current = "public"
+
+    def back(self):
+        self.root.current = "dash"
+
+    # ---------- TEST ----------
+    def take_test(self):
+        self.cur.execute("SELECT content FROM notes WHERE username=?", (self.user,))
+        notes = [n[0] for n in self.cur.fetchall()]
+        if not notes:
+            self.popup("Add notes first")
+            return
+        random.shuffle(notes)
+        score = min(len(notes),10) * 10
+        self.popup(f"Score: {score} / 100")
+
+# ================= RUN =================
+if __name__ == "__main__":
+    GlobalStudy().run()
